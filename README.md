@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/MuskanSinhaPi/pixel-quest-birthday/main/public/1.png" width="45%"/>
-  <img src="https://raw.githubusercontent.com/MuskanSinhaPi/pixel-quest-birthday/main/public/2.png" width="45%"/>
+  <img src="https://raw.githubusercontent.com/MuskanSinhaPi/pixel-quest-birthday/main/public/2cropped.png" width="45%"/>
 </p>
 <p align="center">
   <img src="https://raw.githubusercontent.com/MuskanSinhaPi/pixel-quest-birthday/main/public/3.png" width="45%"/>
