@@ -742,24 +742,62 @@ export default function Game() {
     window.addEventListener("mouseup",onMouseUp);
 
     // ── Block placement ───────────────────────────────────────────────────
-    function placeBlock() {
+    // Shared placement logic used by both mouse and mobile button.
+    // worldX/worldY: exact world coordinate to place at.
+    // Must be AIR, within reach, and not overlapping the player.
+    function placeBlockAt(worldX: number, worldY: number) {
       const s=sr.current;
-      const slot=s.hotbar[s.selSlot]; if (!slot) return;
-      const info=ITEMS[slot.id]; if (!info?.placeTile) return;
-      const tx=Math.floor(s.mouseWorldX/TS), ty=Math.floor(s.mouseWorldY/TS);
-      if (tx<0||tx>=TILES_W||ty<0||ty>=TILES_H) return;
-      if (s.world[ty][tx]!==T.AIR) return;
+      const slot=s.hotbar[s.selSlot]; if (!slot) return false;
+      const info=ITEMS[slot.id]; if (!info?.placeTile) return false;
+      const tx=Math.floor(worldX/TS), ty=Math.floor(worldY/TS);
+      if (tx<0||tx>=TILES_W||ty<0||ty>=TILES_H) return false;
+      if (s.world[ty][tx]!==T.AIR) return false;
+      // Reach check
       const playerCX=s.px+13, playerCY=s.py+22;
       const tileCX=tx*TS+TS/2, tileCY=ty*TS+TS/2;
-      if (Math.hypot(tileCX-playerCX,tileCY-playerCY)>MINE_REACH+TS*1.5) return;
+      if (Math.hypot(tileCX-playerCX,tileCY-playerCY)>MINE_REACH+TS*1.5) return false;
+      // Overlap check — don't place inside the player's bounding box
       const pTX1=Math.floor((s.px+2)/TS), pTX2=Math.floor((s.px+25)/TS);
       const pTY1=Math.floor((s.py+2)/TS), pTY2=Math.floor((s.py+43)/TS);
-      if (tx>=pTX1&&tx<=pTX2&&ty>=pTY1&&ty<=pTY2) return;
+      if (tx>=pTX1&&tx<=pTX2&&ty>=pTY1&&ty<=pTY2) return false;
       s.world[ty][tx]=info.placeTile!;
       slot.count--; if (slot.count<=0) s.hotbar[s.selSlot]=null;
       setHotbarState([...s.hotbar]); playBlockPlace();
+      return true;
+    }
+
+    function placeBlock() {
+      const s=sr.current;
+      placeBlockAt(s.mouseWorldX, s.mouseWorldY);
     }
     (sr.current as any)._placeBlock=placeBlock;
+
+    // ── Mobile place button: place adjacent tile in front of player ───────
+    // BUG FIX: was using TS*2 offset (too far) and allowed placement behind the player.
+    // Now searches in a prioritised order: tile directly in front at 3 heights,
+    // then one tile further out. All go through placeBlockAt which enforces reach + no-overlap.
+    function mobilePlaceBlock() {
+      const s=sr.current;
+      const slot=s.hotbar[s.selSlot]; if (!slot||!ITEMS[slot.id]?.placeTile) return;
+      if (!audioCtx) { getAudioCtx(); startMusic(); }
+      const dir=s.facingRight?1:-1;
+      // Player centre
+      const pcx=s.px+13, pcy=s.py+22;
+      // Priority list: 1 tile ahead at waist/chest/ground, then 2 tiles ahead same heights
+      const candidates=[
+        {dx:dir*TS,   dy:0   },
+        {dx:dir*TS,   dy:-TS },
+        {dx:dir*TS,   dy: TS },
+        {dx:dir*TS*2, dy:0   },
+        {dx:dir*TS*2, dy:-TS },
+        {dx:dir*TS*2, dy: TS },
+      ];
+      for (const {dx,dy} of candidates) {
+        const wx=pcx+dx, wy=pcy+dy;
+        if (placeBlockAt(wx, wy)) return;
+      }
+    }
+    (sr.current as any)._mobilePlaceBlock=mobilePlaceBlock;
 
     // ── Mob physics ───────────────────────────────────────────────────────
     function updateMob(mob:Mob) {
@@ -881,39 +919,55 @@ export default function Game() {
         }
       }
 
-      // ── Mining: ⛏ button (always mines tile directly in front) ───────
+      // ── Mining: ⛏ button ─────────────────────────────────────────────
+      // BUG FIX: Scans up to MINE_REACH in the facing direction across multiple
+      // heights (waist, chest, head, below feet) — no longer locked to one block.
       if (s.mobileMining&&s.gameState==="playing") {
-        const cx=s.px+(s.facingRight?40:-8), cy=s.py+24;
-        const tx=Math.floor(cx/TS), ty=Math.floor(cy/TS);
-        if (tx>=0&&tx<TILES_W&&ty>=0&&ty<TILES_H&&s.world[ty][tx]!==T.AIR&&s.world[ty][tx]!==T.BEDROCK) {
-          if (s.mineTargetX!==tx||s.mineTargetY!==ty) { s.mineTargetX=tx; s.mineTargetY=ty; s.mineProgress=0; }
-          const mf=MINE_FRAMES[s.world[ty][tx]]??60;
-          s.mineProgress++; s.mineHitTimer++;
-          if (s.mineHitTimer%12===0) playMineHit();
-          if (s.mineProgress>=mf) {
-            const brokenTid=s.world[ty][tx]; const drop=TILE_DROP[brokenTid];
-            s.world[ty][tx]=T.AIR; s.mineTargetX=-1; s.mineProgress=0; playBlockBreak();
-            const tname=Object.entries(T).find(([,v])=>v===brokenTid)?.[0]??"unknown";
-            s.blocksMined[tname]=(s.blocksMined[tname]??0)+1; s.totalMined++;
-            if (drop) {
-              if (drop==="diamond") {
-                s.drops.push({id:drop,x:tx*TS+8,y:ty*TS+8,vy:-2,bob:0,dead:false});
-                if (!s.storyTriggered["diamond"]) {
-                  s.storyTriggered["diamond"]=true; s.diamondMined=true;
-                  playDiamondCue(); spawnConfetti(tx*TS+16,ty*TS+16,40);
-                  showAchievement("💎","Diamond Mined!","Rare and precious, just like you.");
-                  showDialogue(DLGS.diamond,5000);
-                }
-              } else {
-                addToInventory(drop,BLOCK_YIELD[brokenTid]??2); playCollectItem();
-                for (let pi=0;pi<6;pi++) {
-                  const a=Math.random()*Math.PI*2,spd=1.5+Math.random()*2;
-                  s.particles.push({x:tx*TS+16,y:ty*TS+16,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd-2,col:ITEMS[drop]?.col??"#aaa",life:0.8,size:4});
+        const dir=s.facingRight?1:-1;
+        const pcx=s.px+13, pcy=s.py+22;
+        // Heights to check: waist, chest, above head, one below ground
+        const checkHeights=[0,-TS,-TS*2,TS];
+        let mined=false;
+        outer:
+        for (let dist=TS;dist<=MINE_REACH+TS;dist+=TS) {
+          for (const dy of checkHeights) {
+            const wx=pcx+dir*dist, wy=pcy+dy;
+            const tx=Math.floor(wx/TS), ty=Math.floor(wy/TS);
+            if (tx<0||tx>=TILES_W||ty<0||ty>=TILES_H) continue;
+            const tid=s.world[ty][tx];
+            if (tid===T.AIR||tid===T.BEDROCK) continue;
+            if (s.mineTargetX!==tx||s.mineTargetY!==ty) { s.mineTargetX=tx; s.mineTargetY=ty; s.mineProgress=0; }
+            const mf=MINE_FRAMES[tid]??60;
+            s.mineProgress++; s.mineHitTimer++;
+            if (s.mineHitTimer%12===0) playMineHit();
+            if (s.mineProgress>=mf) {
+              const drop=TILE_DROP[tid];
+              s.world[ty][tx]=T.AIR; s.mineTargetX=-1; s.mineProgress=0; playBlockBreak();
+              const tname=Object.entries(T).find(([,v])=>v===tid)?.[0]??"unknown";
+              s.blocksMined[tname]=(s.blocksMined[tname]??0)+1; s.totalMined++;
+              if (drop) {
+                if (drop==="diamond") {
+                  s.drops.push({id:drop,x:tx*TS+8,y:ty*TS+8,vy:-2,bob:0,dead:false});
+                  if (!s.storyTriggered["diamond"]) {
+                    s.storyTriggered["diamond"]=true; s.diamondMined=true;
+                    playDiamondCue(); spawnConfetti(tx*TS+16,ty*TS+16,40);
+                    showAchievement("💎","Diamond Mined!","Rare and precious, just like you.");
+                    showDialogue(DLGS.diamond,5000);
+                  }
+                } else {
+                  addToInventory(drop,BLOCK_YIELD[tid]??2); playCollectItem();
+                  for (let pi=0;pi<6;pi++) {
+                    const a=Math.random()*Math.PI*2,spd=1.5+Math.random()*2;
+                    s.particles.push({x:tx*TS+16,y:ty*TS+16,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd-2,col:ITEMS[drop]?.col??"#aaa",life:0.8,size:4});
+                  }
                 }
               }
             }
+            mined=true;
+            break outer;
           }
         }
+        if (!mined) { s.mineTargetX=-1; s.mineProgress=0; }
       }
 
       // ── Drops ─────────────────────────────────────────────────────────
@@ -1203,20 +1257,9 @@ export default function Game() {
           style={{...btn,background:"#8B4513",fontSize:18}}>⛏</button>
         <button
           onPointerDown={()=>{
-            if (!audioCtx) { getAudioCtx(); startMusic(); }
-            const s=sr.current;
-            const fn=(sr.current as any)._placeBlock;
-            if (!fn) return;
-            // Try positions: one tile ahead at chest/waist/head height
-            const ahead=s.facingRight?TS*2:-TS*2;
-            const offsets=[{dx:ahead,dy:-TS},{dx:ahead,dy:0},{dx:ahead,dy:-TS*2}];
-            for (const {dx,dy} of offsets) {
-              const wx=s.px+13+dx, wy=s.py+22+dy;
-              const tx=Math.floor(wx/TS), ty=Math.floor(wy/TS);
-              if (tx>=0&&tx<TILES_W&&ty>=0&&ty<TILES_H&&s.world[ty][tx]===T.AIR) {
-                s.mouseWorldX=wx; s.mouseWorldY=wy; fn(); break;
-              }
-            }
+            // BUG FIX: call mobilePlaceBlock which uses the correct directional-only logic
+            const fn=(sr.current as any)._mobilePlaceBlock;
+            if (fn) fn();
           }}
           style={{...btn,background:"#5A9E44",fontSize:18}}>🧱</button>
         <button onPointerDown={()=>{ sr.current.selSlot=(sr.current.selSlot+8)%9; setSelSlot(sr.current.selSlot); }} style={{...btn,fontSize:12}}>◁ slot</button>
