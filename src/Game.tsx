@@ -649,15 +649,16 @@ function renderTitle(ctx: CanvasRenderingContext2D) {
   const controls: [string, string][] = [
     ["← → / A D", "Move left and right"],
     ["Space / ↑ / W", "Jump"],
-    ["Left-click solid", "Mine block (hold to break)"],
-    ["Left-click air / Right-click", "Place held block"],
+    ["Left-click solid tile", "Mine (hold to break)"],
+    ["Left-click air tile", "Place held block"],
+    ["Right-click", "Place held block"],
     ["Keys 1–9 / Q / E", "Switch hotbar slot"],
-    ["Tap canvas (mobile)", "Mine tile in 3-block radius"],
+    ["Tap canvas (mobile)", "Mine in 3-block radius"],
     ["Walk right →", "Discover the story…"],
   ];
-  const ROW_H = 19, HEADER_H = 36, PAD = 12;
+  const ROW_H = 18, HEADER_H = 36, PAD = 10;
   const ph = HEADER_H + controls.length * ROW_H + PAD;
-  const pw = 400, px = CW / 2 - pw / 2, py = 214;
+  const pw = 440, px = CW / 2 - pw / 2, py = 210;
   ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillRect(px, py, pw, ph);
   ctx.strokeStyle = "#555"; ctx.lineWidth = 1.5; ctx.strokeRect(px, py, pw, ph);
   ctx.strokeStyle = "#333"; ctx.lineWidth = 1; ctx.strokeRect(px + 1, py + 1, pw - 2, ph - 2);
@@ -667,7 +668,7 @@ function renderTitle(ctx: CanvasRenderingContext2D) {
     ctx.fillStyle = "#E8CC6A"; ctx.font = "bold 11px monospace";
     ctx.fillText(key, px + 14, py + HEADER_H + i * ROW_H);
     ctx.fillStyle = "#bbb"; ctx.font = "11px monospace";
-    ctx.fillText(desc, px + 172, py + HEADER_H + i * ROW_H);
+    ctx.fillText(desc, px + 200, py + HEADER_H + i * ROW_H);
   });
   if (Math.floor(now / 550) % 2 === 0) {
     ctx.save();
@@ -876,25 +877,29 @@ export default function Game() {
       s.mouseWorldX = x + s.camX;
       s.mouseWorldY = y + s.camY;
       if (e.button === 0 || e.button === 2) {
-        // Determine if we should place or mine based on what's under the cursor
         const tx = Math.floor((x + s.camX) / TS);
         const ty = Math.floor((y + s.camY) / TS);
         const inBounds = tx >= 0 && tx < TILES_W && ty >= 0 && ty < TILES_H;
         const tileIsAir = inBounds && s.world[ty][tx] === T.AIR;
+        const tileSolid = inBounds && s.world[ty][tx] !== T.AIR;
         const slot = s.hotbar[s.selSlot];
         const hasPlaceable = !!(slot && ITEMS[slot.id]?.placeTile);
 
-        if ((e.button === 2 || (e.button === 0 && tileIsAir)) && hasPlaceable) {
-          // Right-click always places; left-click on air places if holding a block
+        if (e.button === 2) {
+          // Right-click: always attempt place
           placeBlock();
-        } else if (e.button === 0) {
-          // Left-click on solid tile = mine
+        } else if (e.button === 0 && tileIsAir && hasPlaceable) {
+          // Left-click on air with a placeable block: place it
+          placeBlock();
+        } else if (e.button === 0 && (tileSolid || !inBounds)) {
+          // Left-click on any solid tile (or out of bounds): mine
           s.mouseDown = true;
           s.mineActive = true;
           s.mineProgress = 0;
           s.mineTargetX = -1;
           s.mineTargetY = -1;
         }
+        // Left-click on air with non-placeable item: do nothing (intentional)
       }
       e.preventDefault();
     };
