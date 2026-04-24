@@ -813,6 +813,9 @@ export default function Game() {
     keys: {} as Record<string, boolean>,
     titlePhase: true, introDropping: false,
     canvasScale: 1,
+    // Mobile touch mining
+    touchMineX: -1, touchMineY: -1,  // locked tile coords from tap
+    longPressTimer: null as ReturnType<typeof setTimeout> | null,
     blocksMined: {} as Record<string, number>, // tracks count per block type
     totalMined: 0,
   });
@@ -892,6 +895,7 @@ export default function Game() {
     s.storyTriggered = {}; s.diamondMined = false; s.chestOpen = 0;
     s.gameState = "playing"; s.shakeX = 0; s.shakeY = 0; s.shakeTimer = 0;
     s.blocksMined = {}; s.totalMined = 0;
+    s.touchMineX = -1; s.touchMineY = -1;
     phraseIdx = 0; musicPaused = false; endingStarted.current = false;
     s.titlePhase = true; s.introDropping = false;
     setTitlePhase(true); setAchievement(null); setOverlayOn(false);
@@ -992,42 +996,65 @@ export default function Game() {
     // ── Touch events on canvas — tap to mine/place anywhere in reach ──────
     // Also prevents iOS long-press callout on the canvas itself
     const onTouchStart = (e: TouchEvent) => {
-      e.preventDefault(); // blocks callout, magnifier, selection
+      e.preventDefault();
       const s = sr.current;
       if (s.titlePhase) { startGame(); return; }
       if (!audioCtx) { getAudioCtx(); startMusic(); }
       const t = e.changedTouches[0];
       const { x, y } = getCanvasPos(t.clientX, t.clientY);
-      s.mouseWorldX = x + s.camX;
-      s.mouseWorldY = y + s.camY;
+      const worldX = x + s.camX;
+      const worldY = y + s.camY;
+      s.mouseWorldX = worldX;
+      s.mouseWorldY = worldY;
 
-      // Single tap on canvas = mine the tapped tile (within reach radius).
-      // Use the 🧱 button for placing — avoids accidental placement on air taps.
-      // Two-finger tap = place at tapped position.
-      const tx = Math.floor(s.mouseWorldX / TS);
-      const ty = Math.floor(s.mouseWorldY / TS);
+      const tx = Math.floor(worldX / TS);
+      const ty = Math.floor(worldY / TS);
       const inBounds = tx >= 0 && tx < TILES_W && ty >= 0 && ty < TILES_H;
       const tileIsAir = inBounds && s.world[ty][tx] === T.AIR;
+      const tileSolid = inBounds && !tileIsAir;
 
+      // Two-finger tap: place block
       if (e.touches.length >= 2 && tileIsAir) {
-        // Two-finger tap: place block
         placeBlock();
-      } else {
-        // Single tap: mine
+        return;
+      }
+
+      if (tileSolid) {
+        // Lock onto the tapped tile so move doesn't shift the target
+        s.touchMineX = tx;
+        s.touchMineY = ty;
+        // Snap mouseWorldX/Y to tile centre so update loop mines it correctly
+        s.mouseWorldX = tx * TS + TS / 2;
+        s.mouseWorldY = ty * TS + TS / 2;
         s.mineActive = true;
         s.mineProgress = 0;
         s.mineTargetX = -1;
         s.mineTargetY = -1;
+
+        // Long-press: keep mining the same tile continuously (no need to hold visually)
+        if (s.longPressTimer) clearTimeout(s.longPressTimer);
+        // Nothing extra needed — mineActive being true while touch is held is enough
+      } else if (tileIsAir) {
+        // Tap on air — do nothing for mining, two-finger is for placing
+        s.touchMineX = -1;
+        s.touchMineY = -1;
       }
     };
 
     const onTouchMove = (e: TouchEvent) => {
       e.preventDefault();
       const s = sr.current;
-      const t = e.changedTouches[0];
-      const { x, y } = getCanvasPos(t.clientX, t.clientY);
-      s.mouseWorldX = x + s.camX;
-      s.mouseWorldY = y + s.camY;
+      // If we have a locked mine target, keep mouse coords pinned to that tile
+      // so dragging a finger doesn't shift the mining target
+      if (s.mineActive && s.touchMineX >= 0) {
+        s.mouseWorldX = s.touchMineX * TS + TS / 2;
+        s.mouseWorldY = s.touchMineY * TS + TS / 2;
+      } else {
+        const t = e.changedTouches[0];
+        const { x, y } = getCanvasPos(t.clientX, t.clientY);
+        s.mouseWorldX = x + s.camX;
+        s.mouseWorldY = y + s.camY;
+      }
     };
 
     const onTouchEnd = (e: TouchEvent) => {
@@ -1036,6 +1063,9 @@ export default function Game() {
       s.mineActive = false;
       s.mineTargetX = -1;
       s.mineProgress = 0;
+      s.touchMineX = -1;
+      s.touchMineY = -1;
+      if (s.longPressTimer) { clearTimeout(s.longPressTimer); s.longPressTimer = null; }
     };
 
     canvas.addEventListener("touchstart", onTouchStart, { passive: false });
@@ -1697,7 +1727,7 @@ export default function Game() {
         flexShrink: 0,
       }}>
         <button onPointerDown={() => touch("ArrowLeft", true)} onPointerUp={() => touch("ArrowLeft", false)} onPointerLeave={() => touch("ArrowLeft", false)} style={btn}>◀</button>
-        <button onPointerDown={() => touch(" ", true)} onPointerUp={() => touch(" ", false)} onPointerLeave={() => touch(" ", false)} style={{ ...btn, background: "#FFD700", color: "#000", fontWeight: "bold" }}>JUMP</button>
+        <button onPointerDown={() => touch(" ", true)} onPointerUp={() => touch(" ", false)} onPointerLeave={() => touch(" ", false)} style={{ ...btn, background: "#FFD700", color: "#000", fontWeight: "bold", fontSize: 13, WebkitTextSizeAdjust: "none" }}>JUMP</button>
         <button onPointerDown={() => touch("ArrowRight", true)} onPointerUp={() => touch("ArrowRight", false)} onPointerLeave={() => touch("ArrowRight", false)} style={btn}>▶</button>
         <button
           onPointerDown={() => { sr.current.mobileMining = true; if (!audioCtx) { getAudioCtx(); startMusic(); } }}
@@ -1739,7 +1769,7 @@ export default function Game() {
         @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
         @keyframes toastIn { from{opacity:0;transform:translateX(-50%) translateY(-14px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
         canvas { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-        button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+        button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-text-size-adjust: none; text-size-adjust: none; }
       `}</style>
     </div>
   );
