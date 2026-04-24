@@ -1225,8 +1225,9 @@ export default function Game() {
           if (tid === T.AIR) { s.mineTargetX = -1; s.mineProgress = 0; }
           else {
             const cx = s.px + 14, cy = s.py + 22;
+            const reach = s.touchMineX >= 0 ? MINE_REACH * 4 : MINE_REACH;
             const dist = Math.hypot(tx * TS + 16 - cx, ty * TS + 16 - cy);
-            if (dist > MINE_REACH) { s.mineTargetX = -1; s.mineProgress = 0; }
+            if (dist > reach) { s.mineTargetX = -1; s.mineProgress = 0; }
             else {
               if (s.mineTargetX !== tx || s.mineTargetY !== ty) { s.mineTargetX = tx; s.mineTargetY = ty; s.mineProgress = 0; }
               const mf = MINE_FRAMES[tid] ?? 60;
@@ -1740,18 +1741,26 @@ export default function Game() {
             const s = sr.current;
             const placeX = s.px + (s.facingRight ? TS + 8 : -16);
             // Find first air tile in front: chest height, above head, knee height
-            const candidates = [
-              { x: placeX, y: s.py + 22 },
-              { x: placeX, y: s.py - 10 },
-              { x: placeX, y: s.py + 50 },
+            const s = sr.current;
+            if (!audioCtx) { getAudioCtx(); startMusic(); }
+            const fn = (sr.current as any)._placeBlock;
+            if (!fn) return;
+            const ahead = s.facingRight ? TS * 2 : -TS * 2;
+            const offsets = [
+              { dx: ahead, dy: -TS },
+              { dx: ahead, dy: 0 },
+              { dx: ahead, dy: -TS * 2 },
             ];
-            for (const { x, y } of candidates) {
-              const tx = Math.floor(x / TS), ty = Math.floor(y / TS);
-              if (tx >= 0 && tx < TILES_W && ty >= 0 && ty < TILES_H && s.world[ty][tx] === T.AIR) {
-                s.mouseWorldX = x; s.mouseWorldY = y;
-                // Call placeBlock directly — bypasses the flag race condition
-                const fn = (sr.current as any)._placeBlock;
-                if (fn) fn();
+            for (const { dx, dy } of offsets) {
+              const wx = s.px + 13 + dx;
+              const wy = s.py + 22 + dy;
+              const tx = Math.floor(wx / TS);
+              const ty = Math.floor(wy / TS);
+              if (tx >= 0 && tx < TILES_W && ty >= 0 && ty < TILES_H
+                && s.world[ty][tx] === T.AIR) {
+                s.mouseWorldX = wx;
+                s.mouseWorldY = wy;
+                fn();
                 break;
               }
             }
