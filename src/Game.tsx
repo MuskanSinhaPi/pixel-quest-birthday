@@ -712,6 +712,81 @@ export default function Game() {
     };
   }, []);
 
+  // ── iOS home screen bookmark icon + PWA meta tags ────────────────────────
+  useEffect(() => {
+    // Draw a 180x180 pixel icon on an offscreen canvas
+    const ic = document.createElement("canvas");
+    ic.width = 180; ic.height = 180;
+    const c = ic.getContext("2d")!;
+
+    // Background — night sky gradient
+    const bg = c.createLinearGradient(0, 0, 0, 180);
+    bg.addColorStop(0, "#060618"); bg.addColorStop(1, "#0d1a3a");
+    c.fillStyle = bg; c.fillRect(0, 0, 180, 180);
+
+    // Stars
+    [[20,18],[60,35],[100,12],[140,28],[160,8],[35,55],[80,50],[125,44]].forEach(([x,y]) => {
+      c.fillStyle = "rgba(255,255,255,0.85)"; c.fillRect(x, y, 2, 2);
+    });
+
+    // Ground strip
+    c.fillStyle = "#5A9E44"; c.fillRect(0, 130, 180, 12);
+    c.fillStyle = "#8B6347"; c.fillRect(0, 142, 180, 38);
+
+    // Diamond block (centre)
+    c.fillStyle = "#888"; c.fillRect(68, 74, 44, 44);
+    c.fillStyle = "#00BCD4";
+    c.fillRect(72, 82, 14, 10); c.fillRect(90, 78, 14, 10); c.fillRect(80, 96, 12, 14);
+    c.fillStyle = "#80DEEA";
+    c.fillRect(74, 84, 4, 4); c.fillRect(92, 80, 4, 4); c.fillRect(82, 98, 4, 4);
+    c.strokeStyle = "rgba(0,0,0,0.2)"; c.lineWidth = 1; c.strokeRect(68, 74, 44, 44);
+
+    // "S" monogram top-left (for Saksham)
+    c.fillStyle = "#FFD700"; c.font = "bold 32px monospace"; c.textAlign = "left";
+    c.fillText("S", 12, 42);
+
+    // "⛏" pick top-right
+    c.font = "22px serif"; c.textAlign = "right";
+    c.fillText("⛏", 168, 40);
+
+    // "Happy Birthday" text at bottom
+    c.fillStyle = "#FFD700"; c.font = "bold 11px monospace"; c.textAlign = "center";
+    c.fillText("Happy Birthday", 90, 168);
+
+    const iconUrl = ic.toDataURL("image/png");
+
+    // Inject apple-touch-icon
+    const existingIcon = document.querySelector('link[rel="apple-touch-icon"]');
+    if (existingIcon) existingIcon.remove();
+    const link = document.createElement("link");
+    link.rel = "apple-touch-icon";
+    link.setAttribute("sizes", "180x180");
+    link.href = iconUrl;
+    document.head.appendChild(link);
+
+    // Inject PWA meta tags for standalone fullscreen
+    const metas: [string, string][] = [
+      ["apple-mobile-web-app-capable", "yes"],
+      ["apple-mobile-web-app-status-bar-style", "black-translucent"],
+      ["apple-mobile-web-app-title", "Saksham 🎂"],
+      ["mobile-web-app-capable", "yes"],
+    ];
+    const injected: HTMLMetaElement[] = [];
+    metas.forEach(([name, content_]) => {
+      if (!document.querySelector(`meta[name="${name}"]`)) {
+        const m = document.createElement("meta");
+        m.name = name; m.content = content_;
+        document.head.appendChild(m);
+        injected.push(m);
+      }
+    });
+
+    return () => {
+      link.remove();
+      injected.forEach(m => m.remove());
+    };
+  }, []);
+
   const sr = useRef({
     world: generateWorld(),
     px: 60, py: (SURFACE - 1) * TS - 44,
@@ -1512,7 +1587,23 @@ export default function Game() {
           tabIndex={0}
           onClick={() => {
             canvasRef.current?.focus();
+            if (sr.current.titlePhase) {
+              // Handled by startGame which also calls getAudioCtx/startMusic
+              return;
+            }
             if (!audioCtx) { getAudioCtx(); startMusic(); }
+          }}
+          onTouchEnd={(e) => {
+            // Fallback for iOS: if titlePhase and touchstart didn't fire startGame
+            if (sr.current.titlePhase) {
+              e.preventDefault();
+              sr.current.titlePhase = false;
+              sr.current.py = -7 * TS;
+              sr.current.pvy = 0; sr.current.pvx = 0;
+              sr.current.introDropping = true;
+              setTitlePhase(false);
+              getAudioCtx(); startMusic();
+            }
           }}
         />
 
@@ -1542,6 +1633,38 @@ export default function Game() {
           }}>
             {overlayText}
           </div>
+        )}
+
+        {/* Mobile title-phase tap overlay — covers full canvas area */}
+        {titlePhase && (
+          <div
+            onTouchEnd={(e) => {
+              e.preventDefault();
+              if (!sr.current.titlePhase) return;
+              sr.current.titlePhase = false;
+              sr.current.py = -7 * TS;
+              sr.current.pvy = 0; sr.current.pvx = 0;
+              sr.current.introDropping = true;
+              setTitlePhase(false);
+              getAudioCtx(); startMusic();
+            }}
+            onClick={() => {
+              if (!sr.current.titlePhase) return;
+              sr.current.titlePhase = false;
+              sr.current.py = -7 * TS;
+              sr.current.pvy = 0; sr.current.pvx = 0;
+              sr.current.introDropping = true;
+              setTitlePhase(false);
+              getAudioCtx(); startMusic();
+            }}
+            style={{
+              position: "absolute", inset: 0,
+              zIndex: 5, cursor: "pointer",
+              // Transparent — lets the canvas render underneath
+              background: "transparent",
+              WebkitTapHighlightColor: "transparent",
+            }}
+          />
         )}
 
         {endingLines.length > 0 && (
